@@ -1,0 +1,688 @@
+import streamlit as st
+import numpy as np
+import pandas as pd
+import plotly.express as px
+import random
+from datetime import datetime
+
+# =========================================================
+# CONFIG
+# =========================================================
+st.set_page_config(
+    page_title="Deep Naval Search",
+    page_icon="🚢",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
+
+BOARD_SIZE = 10
+COLS = list("ABCDEFGHIJ")
+
+SHIPS = {
+    "Portaaviones": 5,
+    "Acorazado": 4,
+    "Crucero": 3,
+    "Submarino": 3,
+    "Destructor": 2
+}
+
+# Board barcos:
+# 0 = vacío
+# 1 = barco
+# 2 = tocado
+# 3 = hundido
+#
+# Board disparos:
+# 0 = desconocido
+# 1 = agua
+# 2 = tocado
+# 3 = hundido
+
+# =========================================================
+# CSS
+# =========================================================
+st.markdown("""
+<style>
+/* Contenedor general */
+.block-container {
+    padding-top: 1rem !important;
+    padding-bottom: 1rem !important;
+    max-width: 1600px !important;
+}
+
+/* Título */
+.app-title {
+    font-size: 2.5rem;
+    font-weight: 800;
+    line-height: 1.2;
+    margin-bottom: 0.25rem;
+    white-space: normal !important;
+    overflow-wrap: anywhere;
+    word-break: break-word;
+    display: block;
+    width: 100%;
+}
+
+.app-subtitle {
+    font-size: 1.05rem;
+    color: #5b6574;
+    margin-bottom: 1rem;
+}
+
+/* Tarjetas */
+.panel {
+    background: #f8fafc;
+    border: 1px solid #dbe3ea;
+    border-radius: 14px;
+    padding: 0.9rem 1rem;
+    margin-bottom: 0.8rem;
+}
+
+.small-muted {
+    color: #6b7280;
+    font-size: 0.92rem;
+}
+
+/* Coordenadas */
+.coord-cell {
+    text-align: center;
+    font-weight: 700;
+    font-size: 1rem;
+    color: #1f2937;
+    padding-top: 0.15rem;
+}
+
+/* Botones tablero: compactos pero visibles */
+div[data-testid="stButton"] > button {
+    min-height: 2.45rem !important;
+    height: 2.45rem !important;
+    padding: 0 !important;
+    border-radius: 0.35rem !important;
+    font-size: 0.88rem !important;
+    font-weight: 700 !important;
+    border: 1px solid #cbd5e1 !important;
+}
+
+/* Quitar algo de espacio entre elementos */
+div[data-testid="stHorizontalBlock"] {
+    gap: 0.25rem !important;
+}
+
+/* Mejorar métricas */
+[data-testid="stMetricValue"] {
+    font-size: 2rem !important;
+}
+
+/* Registro */
+.log-box {
+    background: #f8fafc;
+    border: 1px solid #dbe3ea;
+    border-radius: 12px;
+    padding: 0.75rem 0.9rem;
+    margin-bottom: 0.45rem;
+}
+</style>
+""", unsafe_allow_html=True)
+
+# =========================================================
+# HELPERS
+# =========================================================
+def label_of(row, col):
+    return f"{COLS[col]}{row + 1}"
+
+def empty_board():
+    return np.zeros((BOARD_SIZE, BOARD_SIZE), dtype=int)
+
+def get_cells(row, col, length, orientation):
+    cells = []
+    if orientation == "Horizontal":
+        for j in range(length):
+            cells.append((row, col + j))
+    else:
+        for i in range(length):
+            cells.append((row + i, col))
+    return cells
+
+def valid_placement(board, row, col, length, orientation):
+    if orientation == "Horizontal" and col + length > BOARD_SIZE:
+        return False
+    if orientation == "Vertical" and row + length > BOARD_SIZE:
+        return False
+
+    for r, c in get_cells(row, col, length, orientation):
+        if board[r, c] != 0:
+            return False
+    return True
+
+def place_ship(board, ship_name, row, col, orientation):
+    length = SHIPS[ship_name]
+    if not valid_placement(board, row, col, length, orientation):
+        return False, []
+
+    cells = get_cells(row, col, length, orientation)
+    for r, c in cells:
+        board[r, c] = 1
+    return True, cells
+
+def init_enemy():
+    board = empty_board()
+    positions = {}
+
+    for ship_name, length in SHIPS.items():
+        placed = False
+        while not placed:
+            orientation = random.choice(["Horizontal", "Vertical"])
+            row = random.randint(0, BOARD_SIZE - 1)
+            col = random.randint(0, BOARD_SIZE - 1)
+
+            if valid_placement(board, row, col, length, orientation):
+                ok, cells = place_ship(board, ship_name, row, col, orientation)
+                if ok:
+                    positions[ship_name] = cells
+                    placed = True
+
+    return board, positions
+
+def get_ship_by_cell(ship_positions, row, col):
+    for ship_name, cells in ship_positions.items():
+        if (row, col) in cells:
+            return ship_name
+    return None
+
+def ship_is_sunk(board, cells):
+    for r, c in cells:
+        if board[r, c] not in (2, 3):
+            return False
+    return True
+
+def mark_sunk(board, cells):
+    for r, c in cells:
+        board[r, c] = 3
+
+def count_ship_cells_alive(board):
+    return int(np.sum(board == 1))
+
+def accuracy(hits, misses, sunk):
+    total = hits + misses + sunk
+    if total == 0:
+        return 0.0
+    return ((hits + sunk) / total) * 100
+
+def add_move(actor, target, result, ship_name=None):
+    st.session_state.move_log.append({
+        "turno_global": len(st.session_state.move_log) + 1,
+        "hora": datetime.now().strftime("%H:%M:%S"),
+        "actor": actor,
+        "casilla": target,
+        "resultado": result,
+        "barco": ship_name if ship_name else "-"
+    })
+
+def all_player_ships_placed():
+    return len(st.session_state.player_ship_positions) == len(SHIPS)
+
+def remaining_enemy_ships():
+    sunk_names = set(st.session_state.enemy_sunk_ships)
+    return {name: size for name, size in SHIPS.items() if name not in sunk_names}
+
+def remaining_player_ships():
+    sunk_names = set(st.session_state.player_sunk_ships)
+    return {name: size for name, size in SHIPS.items() if name not in sunk_names}
+
+# =========================================================
+# HEATMAP
+# =========================================================
+def compute_realistic_heatmap(shots_board, remaining_ships_dict):
+    heat = np.zeros((BOARD_SIZE, BOARD_SIZE), dtype=float)
+
+    hit_cells = {(r, c) for r in range(BOARD_SIZE) for c in range(BOARD_SIZE) if shots_board[r, c] == 2}
+    blocked = {(r, c) for r in range(BOARD_SIZE) for c in range(BOARD_SIZE) if shots_board[r, c] in (1, 3)}
+
+    if not remaining_ships_dict:
+        return heat
+
+    for _, length in remaining_ships_dict.items():
+        for orientation in ("Horizontal", "Vertical"):
+            max_row = BOARD_SIZE if orientation == "Horizontal" else BOARD_SIZE - length + 1
+            max_col = BOARD_SIZE - length + 1 if orientation == "Horizontal" else BOARD_SIZE
+
+            for row in range(max_row):
+                for col in range(max_col):
+                    cells = get_cells(row, col, length, orientation)
+
+                    if any((r, c) in blocked for r, c in cells):
+                        continue
+
+                    overlap = len(set(cells) & hit_cells)
+
+                    if hit_cells and overlap == 0:
+                        continue
+
+                    weight = 1.0 if overlap == 0 else 4 ** overlap
+
+                    for r, c in cells:
+                        if shots_board[r, c] == 0:
+                            heat[r, c] += weight
+
+    if heat.sum() > 0:
+        heat = heat / heat.sum()
+
+    return heat
+
+# =========================================================
+# SESSION STATE
+# =========================================================
+def reset_game():
+    st.session_state.phase = "placement"
+    st.session_state.turn = "Jugador"
+    st.session_state.game_over = False
+    st.session_state.winner = None
+
+    st.session_state.player_board = empty_board()
+    st.session_state.player_ship_positions = {}
+    st.session_state.player_sunk_ships = []
+
+    st.session_state.enemy_board, st.session_state.enemy_ship_positions = init_enemy()
+    st.session_state.enemy_sunk_ships = []
+
+    st.session_state.player_shots = empty_board()
+    st.session_state.ai_memory = empty_board()
+
+    st.session_state.turn_count = 0
+    st.session_state.player_hits = 0
+    st.session_state.player_misses = 0
+    st.session_state.player_sunk = 0
+
+    st.session_state.ai_hits = 0
+    st.session_state.ai_misses = 0
+    st.session_state.ai_sunk = 0
+
+    st.session_state.move_log = []
+    st.session_state.last_action_text = "Sin movimientos todavía."
+    st.session_state.selected_ship = list(SHIPS.keys())[0]
+    st.session_state.orientation = "Horizontal"
+    st.session_state.preview_anchor = None
+
+def ensure_state():
+    if "phase" not in st.session_state:
+        reset_game()
+
+ensure_state()
+
+# =========================================================
+# VISUAL HELPERS
+# =========================================================
+def player_cell_style(row, col):
+    value = st.session_state.player_board[row, col]
+    preview = False
+
+    if st.session_state.phase == "placement" and st.session_state.preview_anchor is not None:
+        pr, pc = st.session_state.preview_anchor
+        ship_len = SHIPS[st.session_state.selected_ship]
+        preview_cells = get_cells(pr, pc, ship_len, st.session_state.orientation)
+        if (row, col) in preview_cells:
+            preview = True
+
+    if preview:
+        return "□"
+
+    if value == 0:
+        return "·"
+    if value == 1:
+        return "B"
+    if value == 2:
+        return "X"
+    return "H"
+
+def enemy_cell_style(row, col):
+    value = st.session_state.player_shots[row, col]
+    if value == 0:
+        return "·"
+    if value == 1:
+        return "A"
+    if value == 2:
+        return "X"
+    return "H"
+
+def colorize_player_symbol(symbol):
+    if symbol == "·":
+        return "🌊"
+    if symbol == "B":
+        return "🚢"
+    if symbol == "X":
+        return "💥"
+    if symbol == "H":
+        return "💀"
+    if symbol == "□":
+        return "🟩"
+    return symbol
+
+def colorize_enemy_symbol(symbol):
+    if symbol == "·":
+        return "⬜"
+    if symbol == "A":
+        return "🟦"
+    if symbol == "X":
+        return "🟧"
+    if symbol == "H":
+        return "🟥"
+    return symbol
+
+# =========================================================
+# GAME LOGIC
+# =========================================================
+def set_preview(row, col):
+    st.session_state.preview_anchor = (row, col)
+    st.session_state.last_action_text = f"Previsualización en {label_of(row, col)}"
+
+def confirm_place_from_preview():
+    if st.session_state.preview_anchor is None:
+        st.warning("Primero selecciona una casilla del tablero.")
+        return
+
+    row, col = st.session_state.preview_anchor
+    ship_name = st.session_state.selected_ship
+    orientation = st.session_state.orientation
+
+    if ship_name in st.session_state.player_ship_positions:
+        st.warning(f"{ship_name} ya está colocado.")
+        return
+
+    ok, cells = place_ship(st.session_state.player_board, ship_name, row, col, orientation)
+    if not ok:
+        st.error("Colocación inválida: el barco se sale del tablero o se solapa.")
+        return
+
+    st.session_state.player_ship_positions[ship_name] = cells
+    st.session_state.preview_anchor = None
+    st.session_state.last_action_text = f"Colocado {ship_name} en {label_of(row, col)} ({orientation})"
+
+def confirm_fleet():
+    if not all_player_ships_placed():
+        st.error("Debes colocar todos los barcos antes de empezar.")
+        return
+    st.session_state.phase = "battle"
+    st.session_state.turn = "Jugador"
+    st.session_state.preview_anchor = None
+    st.session_state.last_action_text = "Flota confirmada. Comienza la partida."
+
+def player_attack(row, col):
+    if st.session_state.phase != "battle":
+        return
+    if st.session_state.turn != "Jugador":
+        return
+    if st.session_state.game_over:
+        return
+    if st.session_state.player_shots[row, col] != 0:
+        st.warning("Esa casilla ya fue atacada.")
+        return
+
+    enemy_val = st.session_state.enemy_board[row, col]
+    target = label_of(row, col)
+
+    if enemy_val == 0:
+        st.session_state.player_shots[row, col] = 1
+        st.session_state.player_misses += 1
+        st.session_state.last_action_text = f"Jugador dispara en {target}: Agua"
+        add_move("Jugador", target, "Agua")
+    else:
+        st.session_state.enemy_board[row, col] = 2
+        st.session_state.player_shots[row, col] = 2
+        st.session_state.player_hits += 1
+
+        ship_name = get_ship_by_cell(st.session_state.enemy_ship_positions, row, col)
+        ship_cells = st.session_state.enemy_ship_positions[ship_name]
+
+        if ship_is_sunk(st.session_state.enemy_board, ship_cells):
+            mark_sunk(st.session_state.enemy_board, ship_cells)
+            for r, c in ship_cells:
+                st.session_state.player_shots[r, c] = 3
+            if ship_name not in st.session_state.enemy_sunk_ships:
+                st.session_state.enemy_sunk_ships.append(ship_name)
+            st.session_state.player_sunk += 1
+            st.session_state.last_action_text = f"Jugador dispara en {target}: Hundido ({ship_name})"
+            add_move("Jugador", target, "Hundido", ship_name)
+        else:
+            st.session_state.last_action_text = f"Jugador dispara en {target}: Tocado"
+            add_move("Jugador", target, "Tocado", ship_name)
+
+    st.session_state.turn_count += 1
+
+    if count_ship_cells_alive(st.session_state.enemy_board) == 0:
+        st.session_state.game_over = True
+        st.session_state.winner = "Jugador"
+        return
+
+    st.session_state.turn = "IA"
+    ai_turn()
+
+def ai_turn():
+    if st.session_state.game_over:
+        return
+
+    remaining_for_ai = remaining_player_ships()
+    heat = compute_realistic_heatmap(st.session_state.ai_memory, remaining_for_ai)
+
+    if heat.sum() == 0:
+        candidates = [(r, c) for r in range(BOARD_SIZE) for c in range(BOARD_SIZE) if st.session_state.ai_memory[r, c] == 0]
+        row, col = random.choice(candidates)
+    else:
+        row, col = np.unravel_index(np.argmax(heat), heat.shape)
+
+    target = label_of(row, col)
+    player_val = st.session_state.player_board[row, col]
+
+    if player_val == 0:
+        st.session_state.ai_memory[row, col] = 1
+        st.session_state.ai_misses += 1
+        st.session_state.last_action_text = f"IA dispara en {target}: Agua"
+        add_move("IA", target, "Agua")
+    else:
+        st.session_state.player_board[row, col] = 2
+        st.session_state.ai_memory[row, col] = 2
+        st.session_state.ai_hits += 1
+
+        ship_name = get_ship_by_cell(st.session_state.player_ship_positions, row, col)
+        ship_cells = st.session_state.player_ship_positions[ship_name]
+
+        if ship_is_sunk(st.session_state.player_board, ship_cells):
+            mark_sunk(st.session_state.player_board, ship_cells)
+            for r, c in ship_cells:
+                st.session_state.ai_memory[r, c] = 3
+            if ship_name not in st.session_state.player_sunk_ships:
+                st.session_state.player_sunk_ships.append(ship_name)
+            st.session_state.ai_sunk += 1
+            st.session_state.last_action_text = f"IA dispara en {target}: Hundido ({ship_name})"
+            add_move("IA", target, "Hundido", ship_name)
+        else:
+            st.session_state.last_action_text = f"IA dispara en {target}: Tocado"
+            add_move("IA", target, "Tocado", ship_name)
+
+    if count_ship_cells_alive(st.session_state.player_board) == 0:
+        st.session_state.game_over = True
+        st.session_state.winner = "IA"
+        return
+
+    st.session_state.turn = "Jugador"
+
+# =========================================================
+# RENDER
+# =========================================================
+st.markdown('<div class="app-title">🚢 Deep Naval Search</div>', unsafe_allow_html=True)
+st.markdown(
+    '<div class="app-subtitle">Versión corregida: tablero clicable, casillas visibles, registro completo y heatmap separado</div>',
+    unsafe_allow_html=True
+)
+
+with st.sidebar:
+    st.header("⚙️ Controles")
+
+    if st.button("Reiniciar partida", use_container_width=True):
+        reset_game()
+
+    st.divider()
+    st.subheader("🚢 Colocación de flota")
+
+    st.session_state.selected_ship = st.selectbox(
+        "Barco",
+        list(SHIPS.keys()),
+        index=list(SHIPS.keys()).index(st.session_state.selected_ship)
+    )
+
+    st.session_state.orientation = st.radio(
+        "Orientación",
+        ["Horizontal", "Vertical"],
+        horizontal=True,
+        index=0 if st.session_state.orientation == "Horizontal" else 1
+    )
+
+    if st.session_state.phase == "placement":
+        if st.button("Confirmar colocación", use_container_width=True):
+            confirm_place_from_preview()
+
+        if st.button("Confirmar flota", use_container_width=True):
+            confirm_fleet()
+
+    st.divider()
+    st.markdown("**Estado de barcos**")
+    for ship_name, size in SHIPS.items():
+        estado = "colocado" if ship_name in st.session_state.player_ship_positions else "pendiente"
+        st.write(f"{ship_name} ({size}) → {estado}")
+
+    st.divider()
+    st.markdown("**Estado actual**")
+    st.write(f"Fase: {'Colocación' if st.session_state.phase == 'placement' else 'Batalla'}")
+    st.write(f"Turno: {st.session_state.turn}")
+    st.caption(st.session_state.last_action_text)
+
+    if st.session_state.game_over:
+        if st.session_state.winner == "Jugador":
+            st.success("Has ganado.")
+        else:
+            st.error("Ha ganado la IA.")
+
+m1, m2, m3, m4, m5 = st.columns(5)
+m1.metric("Turnos", st.session_state.turn_count)
+m2.metric("Aciertos jugador", st.session_state.player_hits)
+m3.metric("Fallos jugador", st.session_state.player_misses)
+m4.metric("Hundidos jugador", st.session_state.player_sunk)
+m5.metric("Precisión", f"{accuracy(st.session_state.player_hits, st.session_state.player_misses, st.session_state.player_sunk):.1f}%")
+
+st.divider()
+
+tab_juego, tab_heatmap, tab_registro = st.tabs(["Juego", "Heatmap", "Registro"])
+
+with tab_juego:
+    left, right = st.columns([1, 1], gap="large")
+
+    with left:
+        st.markdown("""
+        <div class="panel">
+            <b>🛡️ Tu tablero</b><br>
+            <span class="small-muted">En fase de colocación, pulsa una casilla para marcar la posición inicial del barco. La previsualización sale como cuadrado verde.</span>
+        </div>
+        """, unsafe_allow_html=True)
+
+        header_cols = st.columns([0.35] + [1] * BOARD_SIZE)
+        header_cols[0].markdown("<div class='coord-cell'></div>", unsafe_allow_html=True)
+        for i, letter in enumerate(COLS):
+            header_cols[i + 1].markdown(f"<div class='coord-cell'>{letter}</div>", unsafe_allow_html=True)
+
+        for r in range(BOARD_SIZE):
+            row_cols = st.columns([0.35] + [1] * BOARD_SIZE)
+            row_cols[0].markdown(f"<div class='coord-cell'>{r + 1}</div>", unsafe_allow_html=True)
+
+            for c in range(BOARD_SIZE):
+                symbol = colorize_player_symbol(player_cell_style(r, c))
+                disabled = st.session_state.phase != "placement"
+
+                if row_cols[c + 1].button(symbol, key=f"p_{r}_{c}", use_container_width=True, disabled=disabled):
+                    set_preview(r, c)
+
+    with right:
+        st.markdown("""
+        <div class="panel">
+            <b>🎯 Tablero enemigo</b><br>
+            <span class="small-muted">En batalla, pulsa una casilla para disparar.</span>
+        </div>
+        """, unsafe_allow_html=True)
+
+        header_cols = st.columns([0.35] + [1] * BOARD_SIZE)
+        header_cols[0].markdown("<div class='coord-cell'></div>", unsafe_allow_html=True)
+        for i, letter in enumerate(COLS):
+            header_cols[i + 1].markdown(f"<div class='coord-cell'>{letter}</div>", unsafe_allow_html=True)
+
+        for r in range(BOARD_SIZE):
+            row_cols = st.columns([0.35] + [1] * BOARD_SIZE)
+            row_cols[0].markdown(f"<div class='coord-cell'>{r + 1}</div>", unsafe_allow_html=True)
+
+            for c in range(BOARD_SIZE):
+                symbol = colorize_enemy_symbol(enemy_cell_style(r, c))
+                disabled = (
+                    st.session_state.phase != "battle"
+                    or st.session_state.turn != "Jugador"
+                    or st.session_state.game_over
+                )
+
+                if row_cols[c + 1].button(symbol, key=f"e_{r}_{c}", use_container_width=True, disabled=disabled):
+                    player_attack(r, c)
+
+with tab_heatmap:
+    st.subheader("🧠 Heatmap del jugador sobre el tablero enemigo")
+
+    remaining = remaining_enemy_ships()
+    heat = compute_realistic_heatmap(st.session_state.player_shots, remaining)
+
+    if heat.sum() == 0:
+        st.info("Todavía no hay suficiente información para generar un heatmap útil.")
+    else:
+        best_r, best_c = np.unravel_index(np.argmax(heat), heat.shape)
+
+        st.markdown(
+            f"""
+            <div class="panel">
+                <b>Casilla recomendada:</b> {label_of(best_r, best_c)}<br>
+                <b>Probabilidad estimada:</b> {heat[best_r, best_c]:.3f}
+            </div>
+            """,
+            unsafe_allow_html=True
+        )
+
+        fig = px.imshow(
+            heat,
+            text_auto=".2f",
+            aspect="equal",
+            color_continuous_scale="Viridis",
+            x=COLS,
+            y=[str(i) for i in range(1, BOARD_SIZE + 1)],
+            labels={"x": "Columna", "y": "Fila", "color": "Probabilidad"}
+        )
+        fig.update_layout(height=650, margin=dict(l=10, r=10, t=10, b=10))
+        st.plotly_chart(fig, use_container_width=True)
+
+with tab_registro:
+    st.subheader("📜 Registro completo de movimientos")
+
+    if not st.session_state.move_log:
+        st.info("Todavía no hay movimientos.")
+    else:
+        df = pd.DataFrame(st.session_state.move_log)
+        c1, c2 = st.columns([1.1, 1.7])
+
+        with c1:
+            st.markdown("**Últimos movimientos**")
+            latest = df.tail(10).iloc[::-1]
+            for _, row in latest.iterrows():
+                st.markdown(
+                    f"""
+                    <div class="log-box">
+                        <b>#{int(row['turno_global'])}</b> · {row['hora']}<br>
+                        <b>{row['actor']}</b> → {row['casilla']} · {row['resultado']} · {row['barco']}
+                    </div>
+                    """,
+                    unsafe_allow_html=True
+                )
+
+        with c2:
+            st.markdown("**Tabla completa**")
+            st.dataframe(df, use_container_width=True, hide_index=True)
