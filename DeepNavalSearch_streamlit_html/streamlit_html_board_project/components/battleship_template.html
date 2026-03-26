@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Deep Naval Search</title>
+  <style>{{STYLE_CSS}}</style>
+</head>
+<body>
+  <div class="app">
+    <header class="topbar">
+      <div>
+        <h1>🚢 Deep Naval Search</h1>
+        <p class="subtitle">
+          Batalla naval con colocación visual de barcos, drag and drop, registro de movimientos y heatmap heurístico
+        </p>
+      </div>
+    </header>
+
+    <section class="metrics">
+      <div class="metric"><span>Turnos</span><strong id="metric-turns">0</strong></div>
+      <div class="metric"><span>Aciertos jugador</span><strong id="metric-hits">0</strong></div>
+      <div class="metric"><span>Fallos jugador</span><strong id="metric-misses">0</strong></div>
+      <div class="metric"><span>Hundidos jugador</span><strong id="metric-sunk">0</strong></div>
+      <div class="metric"><span>Precisión</span><strong id="metric-accuracy">0.0%</strong></div>
+    </section>
+
+    <section class="tabs">
+      <button class="tab-btn active" data-tab="tab-game">Juego</button>
+      <button class="tab-btn" data-tab="tab-heatmap">Heatmap</button>
+      <button class="tab-btn" data-tab="tab-log">Registro</button>
+    </section>
+
+    <section id="tab-game" class="tab-content active">
+      <aside class="sidebar">
+        <div class="panel">
+          <h2>⚙️ Controles</h2>
+          <button id="reset-btn" class="primary-btn">Reiniciar partida</button>
+        </div>
+
+        <div class="panel">
+          <h2>🚢 Flota</h2>
+          <p class="muted">
+            Arrastra un barco al tablero. Solo se puede colocar una vez cada uno.
+          </p>
+          <div id="ship-list" class="ship-list"></div>
+          <button id="rotate-btn" class="secondary-btn">Rotar barco</button>
+          <button id="start-btn" class="primary-btn" disabled>Comenzar partida</button>
+        </div>
+
+        <div class="panel">
+          <h2>ℹ️ Estado</h2>
+          <p><strong>Fase:</strong> <span id="phase-label">Colocación</span></p>
+          <p><strong>Turno:</strong> <span id="turn-label">Jugador</span></p>
+          <p><strong>Orientación:</strong> <span id="orientation-label">Horizontal</span></p>
+          <p id="status-text" class="muted">Arrastra un barco desde la lista al tablero del jugador.</p>
+        </div>
+
+        <div class="panel">
+          <h2>📘 Leyenda</h2>
+          <div class="legend-item"><span class="legend-box unknown"></span> Desconocido</div>
+          <div class="legend-item"><span class="legend-box water"></span> Agua</div>
+          <div class="legend-item"><span class="legend-box ship"></span> Barco propio</div>
+          <div class="legend-item"><span class="legend-box hit"></span> Tocado</div>
+          <div class="legend-item"><span class="legend-box sunk"></span> Hundido</div>
+          <div class="legend-item"><span class="legend-box preview"></span> Previsualización válida</div>
+          <div class="legend-item"><span class="legend-box preview-bad"></span> Previsualización inválida</div>
+        </div>
+      </aside>
+
+      <main class="boards-area">
+        <div class="panel board-panel">
+          <h2>🛡️ Tu tablero</h2>
+          <p class="muted">
+            Coloca exactamente estos 5 barcos:
+            Portaaviones(5), Acorazado(4), Crucero(3), Submarino(3), Destructor(2).
+          </p>
+          <div id="player-board" class="board"></div>
+        </div>
+
+        <div class="panel board-panel">
+          <h2>🎯 Tablero enemigo</h2>
+          <p class="muted">Cuando comience la partida, pulsa una casilla para disparar.</p>
+          <div id="enemy-board" class="board"></div>
+        </div>
+      </main>
+    </section>
+
+    <section id="tab-heatmap" class="tab-content">
+      <div class="panel">
+        <h2>🧠 Heatmap del jugador</h2>
+        <p class="muted">Basado en colocaciones válidas de los barcos enemigos restantes.</p>
+        <p id="heatmap-best-cell"></p>
+        <div id="heatmap-grid" class="heatmap-grid"></div>
+      </div>
+    </section>
+
+    <section id="tab-log" class="tab-content">
+      <div class="panel">
+        <h2>📜 Registro completo</h2>
+        <div id="log-list" class="log-list"></div>
+      </div>
+    </section>
+  </div>
+
+  <div id="endgame-overlay" class="endgame-overlay hidden" aria-hidden="true">
+    <div id="endgame-effects" class="endgame-effects" aria-hidden="true"></div>
+    <div id="endgame-card" class="endgame-card">
+      <div id="endgame-badge" class="endgame-badge">Fin de la partida</div>
+      <div id="endgame-icon" class="endgame-icon">🏁</div>
+      <h2 id="endgame-title">Partida terminada</h2>
+      <p id="endgame-message">Pulsa reiniciar para jugar otra vez.</p>
+      <div id="endgame-stats" class="endgame-stats"></div>
+      <div class="endgame-actions">
+        <button id="play-again-btn" class="primary-btn">Jugar otra vez</button>
+        <button id="close-overlay-btn" class="secondary-btn">Cerrar</button>
+      </div>
+    </div>
+  </div>
+
+  <script>{{APP_JS}}</script>
+</body>
+</html>
